@@ -1,0 +1,18 @@
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.cache
+*.log
+*.pfx
+*.snk
+.DS_Store
+
+# Output/data (runtime files only)
+/output/
+
+# Local settings (may contain credentials)
+SmartmeterGateway/appsettings.json
+SmartmeterGateway/appsettings.*.json
+!SmartmeterGateway/appsettings.example.json
