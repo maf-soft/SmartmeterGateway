@@ -8,6 +8,8 @@ namespace SmartmeterGateway.Output;
 
 internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
 {
+    public string Name => "influxdb";
+
     private const string DefaultMeasurement = "smartmeter_readings";
 
     private readonly InfluxDbTarget _options;
@@ -40,8 +42,6 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
         };
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Token", _options.Token);
     }
-
-    public string Name => "influxdb";
 
     public async Task<OutputCursor?> TryGetCursorAsync(string meterKey, string outDir, OriginSeries series)
     {

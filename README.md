@@ -2,10 +2,16 @@
 
 Minimal .NET 8 console tool to download available 15-minute smart meter readings (consumption + feed-in) from an SMGW (IF_GW_CON / m2m) and export them to CSV and/or InfluxDB.
 
+![Grafana screenshot](doc/Grafana.png)
+
 ## Requirements
 
 - .NET SDK 8.x
 - Network access to your gateway
+
+## API documentation
+
+- Compact IF_GW_CON notes: [`doc/IF_GW_CON_API.md`](doc/IF_GW_CON_API.md)
 
 ## Configuration
 
@@ -15,7 +21,7 @@ Main config file:
 
 Template:
 
-- `SmartmeterGateway/appsettings.example.json`
+- [`SmartmeterGateway/appsettings.example.json`](SmartmeterGateway/appsettings.example.json)
 
 Important fields:
 
@@ -41,6 +47,12 @@ Do not commit credentials from `appsettings.json`.
 dotnet build .\SmartmeterGateway\SmartmeterGateway.csproj -c Release
 dotnet run --project .\SmartmeterGateway\SmartmeterGateway.csproj -c Release
 ```
+
+## Releases
+
+- Prebuilt executables are published in GitHub Releases:
+  - https://github.com/maf-soft/SmartmeterGateway/releases/latest
+- Download the archive for your platform (for example `win-x64`, `linux-x64`, `linux-arm64`).
 
 ## Output files
 
@@ -87,6 +99,27 @@ Create database:
 .\influxdb3.exe create database home
 ```
 
+## Grafana example (two-meter cascade)
+
+The following example shows a two-meter cascade (`Netz` and `Haus`).
+It calculates 15-minute power from energy deltas (`* 4`) and uses friendly meter names in the legend.
+
+```sql
+SELECT
+  time,
+  (CASE meter
+     WHEN '1ISK0000000001' THEN 'Netz'
+     WHEN '1ISK0000000002' THEN 'Haus'
+     ELSE meter
+   END) || ' - ' || direction AS metric,
+  GREATEST((value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) * 4, 0) AS value
+FROM home_readings
+WHERE "database" = 'origin'
+  AND direction IN ('EINSP','BEZUG')
+  AND $__timeFilter(time)
+ORDER BY time;
+```
+
 ## Notes
 
 - Some gateways are strict with JSON/HTTP framing. This tool sends `Content-Type: application/json` without charset and sets `Content-Length` explicitly.
@@ -115,7 +148,7 @@ Create database:
 
 - Moritz Franckenstein
 - GitHub: `maf-soft`
-- Email: `maf-soft@gmx.net`
+- Email: `^ [at] gmx.net`
 
 ## License
 

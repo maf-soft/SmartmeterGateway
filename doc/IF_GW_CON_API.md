@@ -10,7 +10,7 @@ Scope:
 
 ## Sources and assumptions
 
-- Specification source: `Schnittstellenbeschreibung IF_GW_CON.pdf`
+- Specification source: [`Schnittstellenbeschreibung IF_GW_CON.pdf`](Schnittstellenbeschreibung%20IF_GW_CON.pdf)
 - Runtime behavior notes are marked as **Practice note** and come from live request/response traces.
 - Gateway behavior may differ across firmware versions and deployments.
 

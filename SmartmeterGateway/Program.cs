@@ -16,26 +16,16 @@ internal static class Program
 	public static async Task<int> Main()
 	{
 		var config = LoadConfig();
-		var outputs = CreateOutputs(config);
+		using var outputs = CreateOutputs(config);
 		var meters = config.Meters.Where(m => m.Active).ToList();
 		if (meters.Count == 0)
 		{
 			throw new InvalidOperationException("No active meters configured. Set Meters[].Active=true in SmartmeterGateway/appsettings.json");
 		}
 
-		try
+		foreach (var meter in meters)
 		{
-			foreach (var meter in meters)
-			{
-				await ProcessMeterAsync(config, meter, outputs);
-			}
-		}
-		finally
-		{
-			foreach (var disposable in outputs.OfType<IDisposable>())
-			{
-				disposable.Dispose();
-			}
+			await ProcessMeterAsync(config, meter, outputs.Items);
 		}
 
 		return 0;
@@ -57,7 +47,7 @@ internal static class Program
 			.Where(m => m.BaseUrl is not null && !string.IsNullOrWhiteSpace(m.Username) && !string.IsNullOrWhiteSpace(m.Password))
 			.ToList();
 
-		var outputs = cfg.Outputs ?? new OutputTargets(new CsvTarget(true), new InfluxDbTarget(false, "", "", "", "", "smartmeter_readings", false));
+		var outputs = cfg.Outputs ?? new OutputTargets(new CsvTarget(true), new InfluxDbTarget(false));
 		if (!outputs.Csv.Enabled && !outputs.InfluxDb.Enabled)
 		{
 			throw new InvalidOperationException("At least one output must be enabled: Outputs.Csv.Enabled and/or Outputs.InfluxDb.Enabled.");
@@ -66,14 +56,15 @@ internal static class Program
 		return cfg with { OutputRoot = outputRoot, Meters = meters, Outputs = outputs };
 	}
 
-	static List<ISeriesOutput> CreateOutputs(AppConfig config)
-		=> config.Outputs switch
-		{
-			{ Csv.Enabled: true, InfluxDb.Enabled: true } => [new CsvSeriesOutput(), new InfluxDbSeriesOutput(config.Outputs.InfluxDb)],
-			{ Csv.Enabled: true } => [new CsvSeriesOutput()],
-			{ InfluxDb.Enabled: true } => [new InfluxDbSeriesOutput(config.Outputs.InfluxDb)],
-			_ => [],
-		};
+	static DisposableBag<ISeriesOutput> CreateOutputs(AppConfig config)
+	{
+		var outputs = ((IOutputTarget[])[config.Outputs.Csv, config.Outputs.InfluxDb])
+			.Where(t => t.Enabled)
+			.Select(t => t.CreateOutput())
+			.ToList();
+
+		return new(outputs);
+	}
 
 	static async Task ProcessMeterAsync(AppConfig config, MeterConfig meter, List<ISeriesOutput> outputs)
 	{
@@ -278,20 +269,42 @@ internal static class Program
 
 }
 
+sealed class DisposableBag<T>(List<T> items) : IDisposable where T : IDisposable
+{
+	public List<T> Items { get; } = items;
+
+	public void Dispose()
+	{
+		foreach (var item in Items) item.Dispose();
+	}
+}
+
 sealed record AppConfig(string OutputRoot, List<MeterConfig> Meters, OutputTargets Outputs);
 
 sealed record OutputTargets(CsvTarget Csv, InfluxDbTarget InfluxDb);
 
-sealed record CsvTarget(bool Enabled);
+interface IOutputTarget
+{
+	bool Enabled { get; }
+	ISeriesOutput CreateOutput();
+}
+
+sealed record CsvTarget(bool Enabled) : IOutputTarget
+{
+	public ISeriesOutput CreateOutput() => new CsvSeriesOutput(this);
+}
 
 sealed record InfluxDbTarget(
 	bool Enabled,
-	string Url,
-	string Org,
-	string Bucket,
-	string Token,
-	string Measurement,
-	bool AllowInvalidServerCertificate);
+	string Url = "",
+	string Org = "",
+	string Bucket = "",
+	string Token = "",
+	string Measurement = "",
+	bool AllowInvalidServerCertificate = false) : IOutputTarget
+{
+	public ISeriesOutput CreateOutput() => new InfluxDbSeriesOutput(this);
+}
 
 sealed record MeterConfig(
 	string Name,

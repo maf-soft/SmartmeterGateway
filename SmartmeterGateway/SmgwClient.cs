@@ -67,6 +67,7 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
     public static List<UsagePoint> SelectCanonicalUsagePoints(List<UsagePoint> all) =>
         // We only need 2 series: Bezug + Einspeisung.
         // Prefer TAF1 for each direction; otherwise fallback to TAF7.
+        // TODO: Consider using taf-state==running as an additional selection criterion.
         all
             .Where(p => p.TafNumber is "1" or "7")
             .GroupBy(p => p.UsagePointName[^5..])
@@ -259,6 +260,7 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
         if (!readings.TryGetProperty("channels", out var channels) || channels.ValueKind != JsonValueKind.Array) yield break;
 
         // Simplification: treat the first channel as the series we want.
+        // TODO: Optional robust mode: select channel explicitly by OBIS code.
         JsonElement? firstChannelWithReadings = null;
         foreach (var channel in channels.EnumerateArray())
         {

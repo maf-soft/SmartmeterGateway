@@ -7,6 +7,12 @@ internal sealed class CsvSeriesOutput : ISeriesOutput
 {
     public string Name => "csv";
 
+    public CsvSeriesOutput(CsvTarget options) => _ = options;
+
+    public void Dispose()
+    {
+    }
+
     public Task<OutputCursor?> TryGetCursorAsync(string meterKey, string outDir, OriginSeries series)
     {
         var csvPath = GetCsvPath(outDir, series.UsagePoint);
