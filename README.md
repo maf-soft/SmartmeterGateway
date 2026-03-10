@@ -101,23 +101,52 @@ Create database:
 
 ## Grafana example (two-meter cascade)
 
-The following example shows a two-meter cascade (`Netz` and `Haus`).
-It calculates 15-minute power from energy deltas (`* 4`) and uses friendly meter names in the legend.
+The following example shows a two-meter cascade (`Netz` and `Haus`) where a PV system sits between
+the two meters. Each meter's BEZUG and EINSP readings are combined into a single signed value
+(positive = consumption, negative = feed-in), and `Produktion` is derived algebraically from the
+two signed values.
+
+`delta * 4` converts Wh/15 min to average W for the interval.
+
+In Grafana: `Time column = time`, `Metric column = metric`, `Value column = value`, `Unit = W`.  
+Setting **Fill opacity** to `25` for all series gives a clear area chart.
+
+An importable dashboard JSON is available at [`doc/grafana-dashboard.json`](doc/grafana-dashboard.json).
 
 ```sql
+WITH d AS (
+  SELECT
+    time,
+    CASE WHEN meter='1ISK0000000001' THEN 'Netz'
+         WHEN meter='1ISK0000000002' THEN 'Haus'
+         ELSE meter END AS meter,
+    direction,
+    (value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) * 4 AS delta
+  FROM home_readings
+  WHERE "database"='origin'
+    AND direction IN ('EINSP','BEZUG')
+    AND $__timeFilter(time)
+),
+signed AS (
+  SELECT
+    time,
+    meter,
+    SUM(CASE WHEN direction='BEZUG' THEN delta ELSE -delta END) AS value
+  FROM d
+  GROUP BY time, meter
+)
+SELECT time, meter AS metric, value FROM signed
+
+UNION ALL
+
 SELECT
   time,
-  (CASE meter
-     WHEN '1ISK0000000001' THEN 'Netz'
-     WHEN '1ISK0000000002' THEN 'Haus'
-     ELSE meter
-   END) || ' - ' || direction AS metric,
-  GREATEST((value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) * 4, 0) AS value
-FROM home_readings
-WHERE "database" = 'origin'
-  AND direction IN ('EINSP','BEZUG')
-  AND $__timeFilter(time)
-ORDER BY time;
+  'Produktion' AS metric,
+  MAX(CASE WHEN meter='Haus' THEN value END)
+  - MAX(CASE WHEN meter='Netz' THEN value END) AS value
+FROM signed
+GROUP BY time
+ORDER BY time, metric;
 ```
 
 ## Notes
