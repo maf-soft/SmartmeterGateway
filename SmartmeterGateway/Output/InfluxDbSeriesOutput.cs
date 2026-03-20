@@ -68,58 +68,72 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
         };
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _options.Token);
 
-        using var response = await _http.SendAsync(request);
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        try
         {
-            var payload = await response.Content.ReadAsStringAsync();
-            if (response.StatusCode == HttpStatusCode.InternalServerError
-                && payload.Contains("table 'public.iox.", StringComparison.OrdinalIgnoreCase)
-                && payload.Contains("not found", StringComparison.OrdinalIgnoreCase))
+            response = await _http.SendAsync(request);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException(
+                $"InfluxDB is not reachable at '{_options.Url}'. Start InfluxDB first (for example '.\\influx.cmd') and verify Outputs.InfluxDb.Url.",
+                ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var payload = await response.Content.ReadAsStringAsync();
+                if (response.StatusCode == HttpStatusCode.InternalServerError
+                    && payload.Contains("table 'public.iox.", StringComparison.OrdinalIgnoreCase)
+                    && payload.Contains("not found", StringComparison.OrdinalIgnoreCase))
+                {
+                    return null;
+                }
+                throw new InvalidOperationException($"InfluxDB query failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
+            }
+
+            var json = await response.Content.ReadAsStringAsync();
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0)
             {
                 return null;
             }
-            throw new InvalidOperationException($"InfluxDB query failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
-        }
 
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        if (doc.RootElement.ValueKind != JsonValueKind.Array || doc.RootElement.GetArrayLength() == 0)
-        {
-            return null;
-        }
-
-        var row = doc.RootElement[0];
-        if (!row.TryGetProperty("max_time", out var maxTimeProp) || maxTimeProp.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
-        {
-            return null;
-        }
-
-        var text = maxTimeProp.GetString();
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return null;
-        }
-
-        if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var ts))
-        {
-            throw new InvalidOperationException($"Invalid InfluxDB max_time timestamp: '{text}'");
-        }
-
-        decimal? value = null;
-        if (row.TryGetProperty("value", out var valueProp) && valueProp.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
-        {
-            var valueText = valueProp.ValueKind == JsonValueKind.Number
-                ? valueProp.GetRawText()
-                : valueProp.GetString();
-
-            if (!string.IsNullOrWhiteSpace(valueText)
-                && decimal.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            var row = doc.RootElement[0];
+            if (!row.TryGetProperty("max_time", out var maxTimeProp) || maxTimeProp.ValueKind is JsonValueKind.Null or JsonValueKind.Undefined)
             {
-                value = parsed;
+                return null;
             }
-        }
 
-        return new OutputCursor(ts.ToUniversalTime(), value);
+            var text = maxTimeProp.GetString();
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            if (!DateTimeOffset.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var ts))
+            {
+                throw new InvalidOperationException($"Invalid InfluxDB max_time timestamp: '{text}'");
+            }
+
+            decimal? value = null;
+            if (row.TryGetProperty("value", out var valueProp) && valueProp.ValueKind is not JsonValueKind.Null and not JsonValueKind.Undefined)
+            {
+                var valueText = valueProp.ValueKind == JsonValueKind.Number
+                    ? valueProp.GetRawText()
+                    : valueProp.GetString();
+
+                if (!string.IsNullOrWhiteSpace(valueText)
+                    && decimal.TryParse(valueText, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+                {
+                    value = parsed;
+                }
+            }
+
+            return new OutputCursor(ts.ToUniversalTime(), value);
+        }
     }
 
     public async Task<OutputWriteResult> WriteAsync(string meterKey, string outDir, OriginSeries series, IReadOnlyList<ReadingPoint> points, bool append)
@@ -155,11 +169,25 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
         {
             var endpoint = $"/api/v2/write?org={Uri.EscapeDataString(_options.Org)}&bucket={Uri.EscapeDataString(_options.Bucket)}&precision=s";
             using var content = new StringContent(body.ToString(), Encoding.UTF8, "text/plain");
-            using var response = await _http.PostAsync(endpoint, content);
-            if (!response.IsSuccessStatusCode)
+            HttpResponseMessage response;
+            try
             {
-                var payload = await response.Content.ReadAsStringAsync();
-                throw new InvalidOperationException($"InfluxDB write failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
+                response = await _http.PostAsync(endpoint, content);
+            }
+            catch (HttpRequestException ex)
+            {
+                throw new InvalidOperationException(
+                    $"InfluxDB is not reachable at '{_options.Url}'. Start InfluxDB first (for example '.\\influx.cmd') and verify Outputs.InfluxDb.Url.",
+                    ex);
+            }
+
+            using (response)
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    var payload = await response.Content.ReadAsStringAsync();
+                    throw new InvalidOperationException($"InfluxDB write failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
+                }
             }
         }
 

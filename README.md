@@ -26,6 +26,9 @@ Template:
 Important fields:
 
 - `OutputRoot`: target directory (default: `output`)
+- `Polling`
+  - `IntervalMinutes`: distance between polling ticks in minutes; ticks are always aligned to interval slots (plus `OffsetMinutes`), not relative to process start
+  - `OffsetMinutes`: delay after aligned slot boundary before polling (for example `15+1` -> `xx:01/16/31/46`)
 - `Outputs`
   - `Csv.Enabled`: enable/disable CSV output
   - `InfluxDb.Enabled`: enable/disable InfluxDB output
@@ -47,6 +50,19 @@ Do not commit credentials from `appsettings.json`.
 dotnet build .\SmartmeterGateway\SmartmeterGateway.csproj -c Release
 dotnet run --project .\SmartmeterGateway\SmartmeterGateway.csproj -c Release
 ```
+
+Optional continuous polling mode:
+
+```bash
+dotnet run --project .\SmartmeterGateway\SmartmeterGateway.csproj -c Release -- --poll
+```
+
+Behavior:
+
+- Startup always performs the normal catch-up run first.
+- Without `--poll`, the process exits after catch-up.
+- With `--poll`, the process keeps running and fetches only data newer than the last successful in-memory cursor.
+- Stop polling with `Ctrl+C`.
 
 ## Releases
 
