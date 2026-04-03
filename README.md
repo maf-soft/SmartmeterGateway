@@ -115,26 +115,41 @@ Create database:
 .\influxdb3.exe create database home
 ```
 
-## Grafana example (two-meter cascade)
+## Grafana example queries (build your own dashboard)
 
-The following example shows a two-meter cascade (`Netz` and `Haus`) where a PV system sits between
-the two meters. Each meter's BEZUG and EINSP readings are combined into a single signed value
+An importable dashboard JSON is available at [`doc/grafana-dashboard.json`](doc/grafana-dashboard.json).
+
+The examples below model a two-meter cascade (`Netz` and `Haus`) where a PV system sits between
+the two meters. Each meter's `BEZUG` and `EINSP` readings are combined into a signed series
 (positive = consumption, negative = feed-in), and `Produktion` is derived algebraically from the
 two signed values.
 
-`delta * 4` converts Wh/15 min to average W for the interval.
+Recommended Grafana template variables:
 
-In Grafana: `Time column = time`, `Metric column = metric`, `Value column = value`, `Unit = W`.  
-Setting **Fill opacity** to `25` for all series gives a clear area chart.
+- `meter_netz`: physical meter ID used as grid meter (`Netz`)
+- `meter_haus`: physical meter ID used as house meter (`Haus`)
 
-An importable dashboard JSON is available at [`doc/grafana-dashboard.json`](doc/grafana-dashboard.json).
+Conventions used by the queries:
+
+- Input values are cumulative Wh counters per `meter` and `direction` (`BEZUG`, `EINSP`).
+- Delta is computed via `LAG(value)`.
+- In the power query, `delta * 4` converts Wh per 15-minute slot to average W.
+- Signed logic: `BEZUG` is positive, `EINSP` is negative.
+
+Grafana panel hints:
+
+- Use `time` as time column and format as time series.
+- With the current wide-query style, each named output column becomes one series (`Netz`, `Haus`, `Produktion`, ...).
+- For the top power panel, **Fill opacity** around `25` gives a clear area chart.
+
+### 1) Smartmeter – 15-min average power
 
 ```sql
 WITH d AS (
   SELECT
     time,
-    CASE WHEN meter='1ISK0000000001' THEN 'Netz'
-         WHEN meter='1ISK0000000002' THEN 'Haus'
+    CASE WHEN meter='${meter_netz}' THEN 'Netz'
+         WHEN meter='${meter_haus}' THEN 'Haus'
          ELSE meter END AS meter,
     direction,
     (value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) * 4 AS delta
@@ -151,19 +166,72 @@ signed AS (
   FROM d
   GROUP BY time, meter
 )
-SELECT time, meter AS metric, value FROM signed
-
-UNION ALL
-
 SELECT
   time,
-  'Produktion' AS metric,
-  MAX(CASE WHEN meter='Haus' THEN value END)
-  - MAX(CASE WHEN meter='Netz' THEN value END) AS value
+  MAX(CASE WHEN meter='Netz' THEN value END) AS "Netz",
+  MAX(CASE WHEN meter='Haus' THEN value END) AS "Haus",
+  MAX(CASE WHEN meter='Haus' THEN value END) - MAX(CASE WHEN meter='Netz' THEN value END) AS "Produktion"
 FROM signed
 GROUP BY time
-ORDER BY time, metric;
+ORDER BY time;
 ```
+
+### 2) Daily/Monthly sums
+
+```sql
+WITH d AS (
+  SELECT
+    time,
+    CASE WHEN meter='${meter_netz}' THEN 'Netz'
+         WHEN meter='${meter_haus}' THEN 'Haus'
+         ELSE meter END AS meter,
+    direction,
+    (value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) AS delta_wh
+  FROM home_readings
+  WHERE "database"='origin'
+    AND direction IN ('EINSP','BEZUG')
+    -- Monthly variant: use INTERVAL '2 years'
+    AND time >= NOW() - INTERVAL '90 days'
+),
+agg AS (
+  SELECT
+    -- Monthly variant: DATE_TRUNC('month', time)
+    DATE_TRUNC('day', time) AS time,
+    meter,
+    direction,
+    SUM(delta_wh) / 1000.0 AS kwh
+  FROM d
+  WHERE delta_wh IS NOT NULL
+  GROUP BY 1, 2, 3
+),
+net AS (
+  SELECT
+    time,
+    meter,
+    MAX(CASE WHEN direction='BEZUG' THEN kwh END) AS bezug_kwh,
+    MAX(CASE WHEN direction='EINSP' THEN kwh END) AS einsp_kwh
+  FROM agg
+  GROUP BY time, meter
+)
+SELECT
+  time,
+  MAX(CASE WHEN meter='Netz' THEN bezug_kwh END) AS "Netz Bezug",
+  MAX(CASE WHEN meter='Haus' THEN bezug_kwh END) AS "Haus Bezug",
+  -MAX(CASE WHEN meter='Netz' THEN einsp_kwh END) AS "Netz Einspeisung",
+  -MAX(CASE WHEN meter='Haus' THEN einsp_kwh END) AS "Haus Einspeisung",
+  MAX(CASE WHEN meter='Haus' THEN bezug_kwh - einsp_kwh END)
+  - MAX(CASE WHEN meter='Netz' THEN bezug_kwh - einsp_kwh END) AS "Produktion"
+FROM net
+GROUP BY time
+ORDER BY time;
+```
+
+## Privacy / anonymization
+
+- The Grafana dashboard JSON does not contain credentials or fixed real meter IDs.
+- Meter IDs are selected at runtime via variables (`meter_netz`, `meter_haus`).
+- Local runtime output is excluded from Git via `.gitignore` (`/output/`).
+- Local credentials are excluded via `.gitignore` (`SmartmeterGateway/appsettings.json`).
 
 ## Notes
 
