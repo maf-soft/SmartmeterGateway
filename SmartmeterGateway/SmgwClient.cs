@@ -10,12 +10,12 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = null };
 
-    public static async Task<SmgwClient> CreateAsync(Uri baseUrl, NetworkCredential credential, bool ignoreInvalidTlsCertificate)
+    public static async Task<SmgwClient> CreateAsync(Uri baseUrl, NetworkCredential credential, bool ignoreInvalidTlsCertificate, CancellationToken ct = default)
     {
         var http = CreateHttpClient(baseUrl, credential, ignoreInvalidTlsCertificate);
         try
         {
-            var location = await GetM2mLocationAsync(http);
+            var location = await GetM2mLocationAsync(http, ct);
             return new SmgwClient(http, location);
         }
         catch
@@ -25,10 +25,10 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
         }
     }
 
-    public async Task<(List<UsagePoint> UsagePoints, byte[] UserInfoJson)> GetUsagePointsAsync()
+    public async Task<(List<UsagePoint> UsagePoints, byte[] UserInfoJson)> GetUsagePointsAsync(CancellationToken ct = default)
     {
         var payload = Payload(("method", "user-info"));
-        var json = await PostJsonAsync(payload);
+        var json = await PostJsonAsync(payload, ct);
 
         try
         {
@@ -80,10 +80,10 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
             _ => throw new InvalidOperationException("Could not find both BEZUG and EINSP usage points in user-info."),
         };
 
-    public async Task<byte[]> FetchUsagePointInfoRawAsync(string usagePointId) =>
+    public async Task<byte[]> FetchUsagePointInfoRawAsync(string usagePointId, CancellationToken ct = default) =>
         await PostJsonAsync(Payload(
             ("method", "usage-point-info"),
-            ("usage-point-id", usagePointId)));
+            ("usage-point-id", usagePointId)), ct);
 
     public static int? ParseOriginScalerFromUsagePointInfoJson(byte[] usagePointInfoJson)
     {
@@ -114,7 +114,8 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
         string database,
         int scaler,
         TimeSpan samplingInterval,
-        DateTimeOffset? stopBeforeUtc = null)
+        DateTimeOffset? stopBeforeUtc = null,
+        CancellationToken ct = default)
     {
         var pointsByTime = new Dictionary<DateTimeOffset, decimal?>(capacity: 4096);
         var windowEnd = DateTimeOffset.UtcNow;
@@ -127,6 +128,8 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
 
         for (; ; )
         {
+            ct.ThrowIfCancellationRequested();
+
             var fromUtc = windowEnd - windowSpan;
             var toUtc = windowEnd;
             if (stopBeforeUtc is not null && fromUtc < stopBeforeUtc.Value)
@@ -134,7 +137,7 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
                 fromUtc = stopBeforeUtc.Value;
             }
 
-            var rows = await FetchReadingsWindowAsync(usagePointId, database, scaler, fromUtc, toUtc);
+            var rows = await FetchReadingsWindowAsync(usagePointId, database, scaler, fromUtc, toUtc, ct);
             if (rows.Count == 0)
             {
                 break;
@@ -183,9 +186,9 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
         };
     }
 
-    private static async Task<string> GetM2mLocationAsync(HttpClient http)
+    private static async Task<string> GetM2mLocationAsync(HttpClient http, CancellationToken ct)
     {
-        using var res = await http.GetAsync("smgw/m2m", HttpCompletionOption.ResponseHeadersRead);
+        using var res = await http.GetAsync("smgw/m2m", HttpCompletionOption.ResponseHeadersRead, ct);
         if (res.StatusCode != HttpStatusCode.TemporaryRedirect || res.Headers.Location is null)
         {
             throw new InvalidOperationException($"Expected 307 + Location from GET /smgw/m2m, got {(int)res.StatusCode} {res.ReasonPhrase}");
@@ -199,7 +202,8 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
         string database,
         int scaler,
         DateTimeOffset fromUtc,
-        DateTimeOffset toUtc)
+        DateTimeOffset toUtc,
+        CancellationToken ct)
     {
         var payload = Payload(
             ("method", "readings"),
@@ -208,13 +212,13 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
             ("fromtime", fromUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")),
             ("totime", toUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'")));
 
-        var json = await PostJsonAsync(payload);
+        var json = await PostJsonAsync(payload, ct);
         var rows = ParseReadingsRows(json, scaler).ToList();
         rows.Sort(static (a, b) => a.TargetTimeUtc.CompareTo(b.TargetTimeUtc));
         return rows;
     }
 
-    private async Task<byte[]> PostJsonAsync(Dictionary<string, object?> payload)
+    private async Task<byte[]> PostJsonAsync(Dictionary<string, object?> payload, CancellationToken ct = default)
     {
         var json = JsonSerializer.Serialize(payload, JsonOptions);
 
@@ -227,13 +231,13 @@ public sealed class SmgwClient(HttpClient http, string location) : IDisposable
 
         try
         {
-            using var res = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead);
+            using var res = await http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
             if (res.IsSuccessStatusCode)
             {
-                return await res.Content.ReadAsByteArrayAsync();
+                return await res.Content.ReadAsByteArrayAsync(ct);
             }
 
-            var bodyText = await res.Content.ReadAsStringAsync();
+            var bodyText = await res.Content.ReadAsStringAsync(ct);
             bodyText = bodyText.Replace("\r", " ").Replace("\n", " ").Trim();
             throw new InvalidOperationException($"SMGW returned {(int)res.StatusCode} {res.ReasonPhrase}. Body: {bodyText}");
         }

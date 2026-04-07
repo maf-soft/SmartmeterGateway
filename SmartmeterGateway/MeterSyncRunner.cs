@@ -16,7 +16,13 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
 
     public async Task RunAsync(List<MeterConfig> meters, bool enablePolling, CancellationToken ct)
     {
-        var runtime = await RunInitialCatchUpAsync(meters);
+        var runtime = await RunInitialCatchUpAsync(meters, ct);
+        if (ct.IsCancellationRequested)
+        {
+            Console.WriteLine("Initial catch-up canceled.");
+            return;
+        }
+
         if (!enablePolling)
         {
             return;
@@ -32,12 +38,17 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
         await RunPollingAsync(_config.Polling, runtime, ct);
     }
 
-    private async Task<List<MeterRuntimeState>> RunInitialCatchUpAsync(List<MeterConfig> meters)
+    private async Task<List<MeterRuntimeState>> RunInitialCatchUpAsync(List<MeterConfig> meters, CancellationToken ct)
     {
         var runtimeStates = new List<MeterRuntimeState>(meters.Count);
         foreach (var meter in meters)
         {
-            var state = await InitializeMeterRuntimeAsync(meter);
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
+            var state = await InitializeMeterRuntimeAsync(meter, ct);
             if (state is not null)
             {
                 runtimeStates.Add(state);
@@ -47,7 +58,7 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
         return runtimeStates;
     }
 
-    private async Task<MeterRuntimeState?> InitializeMeterRuntimeAsync(MeterConfig meter)
+    private async Task<MeterRuntimeState?> InitializeMeterRuntimeAsync(MeterConfig meter, CancellationToken ct)
     {
         var meterKey = MakeSafe(string.IsNullOrWhiteSpace(meter.Name) ? meter.BaseUrl.Host : meter.Name);
         var outDir = Path.Combine(_config.OutputRoot, meterKey);
@@ -64,16 +75,18 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
             using var smgw = await SmgwClient.CreateAsync(
                 meter.BaseUrl,
                 new NetworkCredential(meter.Username, meter.Password),
-                meter.AllowInvalidServerCertificate);
+                meter.AllowInvalidServerCertificate,
+                ct);
 
-            var (usagePoints, userInfoJson) = await smgw.GetUsagePointsAsync();
+            var (usagePoints, userInfoJson) = await smgw.GetUsagePointsAsync(ct);
             var selected = SmgwClient.SelectCanonicalUsagePoints(usagePoints);
             await SaveJsonPrettyAsync(Path.Combine(outDir, "user-info.json"), userInfoJson);
 
             var originSeries = new List<OriginSeries>(capacity: selected.Count);
             foreach (var up in selected)
             {
-                var upiJson = await smgw.FetchUsagePointInfoRawAsync(up.UsagePointId);
+                ct.ThrowIfCancellationRequested();
+                var upiJson = await smgw.FetchUsagePointInfoRawAsync(up.UsagePointId, ct);
                 await SaveJsonPrettyAsync(Path.Combine(outDir, $"usage-point-info-{MakeSafe(up.UsagePointName)}.json"), upiJson);
                 var scalerOrNull = SmgwClient.ParseOriginScalerFromUsagePointInfoJson(upiJson);
                 if (scalerOrNull is null)
@@ -91,7 +104,7 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
                 return null;
             }
 
-            var lastSuccessByUsagePointId = await InitialDownloadToOutputsAsync(smgw, originSeries, meterKey, outDir);
+            var lastSuccessByUsagePointId = await InitialDownloadToOutputsAsync(smgw, originSeries, meterKey, outDir, ct);
             var seriesStates = originSeries
                 .Select(series => new SeriesRuntimeState(series)
                 {
@@ -100,6 +113,10 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
                 .ToList();
 
             return new MeterRuntimeState(meter, meterKey, outDir, seriesStates);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return null;
         }
         catch (Exception ex)
         {
@@ -112,17 +129,24 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
         SmgwClient smgw,
         List<OriginSeries> originSeries,
         string meterKey,
-        string outDir)
+        string outDir,
+        CancellationToken ct)
     {
         Directory.CreateDirectory(Path.GetFullPath(outDir));
         var lastSuccessByUsagePointId = new Dictionary<string, DateTimeOffset?>(StringComparer.Ordinal);
 
         foreach (var series in originSeries)
         {
+            if (ct.IsCancellationRequested)
+            {
+                break;
+            }
+
             var up = series.UsagePoint;
             var cursors = new Dictionary<ISeriesOutput, OutputCursor?>(_outputs.Count);
             foreach (var output in _outputs)
             {
+                ct.ThrowIfCancellationRequested();
                 cursors[output] = await output.TryGetCursorAsync(meterKey, outDir, series);
             }
 
@@ -148,7 +172,8 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
                 OriginDatabase,
                 series.Scaler,
                 SamplingInterval,
-                stopBeforeUtc);
+                stopBeforeUtc,
+                ct);
 
             if (points.Count == 0)
             {
@@ -161,6 +186,7 @@ internal sealed class MeterSyncRunner(AppConfig config, List<ISeriesOutput> outp
 
             foreach (var output in _outputs)
             {
+                ct.ThrowIfCancellationRequested();
                 var cursor = cursors[output];
                 if (cursor is not null)
                 {

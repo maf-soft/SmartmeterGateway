@@ -62,7 +62,7 @@ Behavior:
 - Startup always performs the normal catch-up run first.
 - Without `--poll`, the process exits after catch-up.
 - With `--poll`, the process keeps running and fetches only data newer than the last successful in-memory cursor.
-- Stop polling with `Ctrl+C`.
+- Stop the process gracefully with `Ctrl+C`.
 
 ## Releases
 

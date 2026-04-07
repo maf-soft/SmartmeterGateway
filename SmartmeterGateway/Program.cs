@@ -20,18 +20,24 @@ internal static class Program
 
 		var enablePolling = HasPollFlag(args);
 		using var cts = new CancellationTokenSource();
-		if (enablePolling)
+		ConsoleCancelEventHandler cancelHandler = (_, e) =>
 		{
-			Console.CancelKeyPress += (_, e) =>
-			{
-				e.Cancel = true;
-				cts.Cancel();
-				Console.WriteLine("Ctrl+C received. Stopping polling...");
-			};
+			e.Cancel = true;
+			cts.Cancel();
+			Console.WriteLine("Ctrl+C received. Stopping...");
+		};
+
+		Console.CancelKeyPress += cancelHandler;
+		try
+		{
+			var runner = new MeterSyncRunner(config, outputs.Items);
+			await runner.RunAsync(meters, enablePolling, cts.Token);
+		}
+		finally
+		{
+			Console.CancelKeyPress -= cancelHandler;
 		}
 
-		var runner = new MeterSyncRunner(config, outputs.Items);
-		await runner.RunAsync(meters, enablePolling, cts.Token);
 		return 0;
 	}
 
