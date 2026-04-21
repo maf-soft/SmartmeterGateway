@@ -160,7 +160,12 @@
           }
         ]
       },
-      "gridPos": { "h": 14, "w": 24, "x": 0, "y": 0 },
+      "gridPos": {
+        "h": 14,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
       "id": 1,
       "options": {
         "legend": {
@@ -595,7 +600,10 @@
   ],
   "preload": false,
   "schemaVersion": 42,
-  "tags": ["smartmeter", "energy"],
+  "tags": [
+    "smartmeter",
+    "energy"
+  ],
   "templating": {
     "list": [
       {
@@ -608,18 +616,18 @@
           "type": "influxdb",
           "uid": "${DS_INFLUXDB}"
         },
-        "definition": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text",
+        "definition": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text DESC",
         "hide": 0,
         "includeAll": false,
         "label": "Meter Netz",
         "multi": false,
         "name": "meter_netz",
         "options": [],
-        "query": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text",
+        "query": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text DESC",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       },
       {
@@ -632,27 +640,30 @@
           "type": "influxdb",
           "uid": "${DS_INFLUXDB}"
         },
-        "definition": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text",
+        "definition": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text ASC",
         "hide": 0,
         "includeAll": false,
         "label": "Meter Haus",
         "multi": false,
         "name": "meter_haus",
         "options": [],
-        "query": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text",
+        "query": "SELECT DISTINCT meter AS __value, meter AS __text FROM home_readings ORDER BY __text ASC",
         "refresh": 1,
         "regex": "",
         "skipUrlSync": false,
-        "sort": 1,
+        "sort": 0,
         "type": "query"
       }
     ]
   },
-  "time": { "from": "now-7d", "to": "now" },
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Smartmeter Gateway",
+  "title": "Smartmeter Gateway (Influx)",
   "uid": "smartmeter-gateway",
-  "version": 1,
+  "version": 10,
   "weekStart": ""
 }

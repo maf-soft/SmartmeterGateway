@@ -1,6 +1,6 @@
 # SmartmeterGateway
 
-Minimal .NET 8 console tool to download available 15-minute smart meter readings (consumption + feed-in) from an SMGW (IF_GW_CON / m2m) and export them to CSV and/or InfluxDB.
+Minimal .NET 8 console tool to download available 15-minute smart meter readings (consumption + feed-in) from an SMGW (IF_GW_CON / m2m) and export them to CSV, InfluxDB, and/or SQLite.
 
 ![Grafana screenshot](doc/Grafana.png)
 
@@ -35,6 +35,8 @@ Important fields:
   - `InfluxDb.Url` / `Org` / `Bucket` / `Token`
   - `InfluxDb.Measurement` (default: `smartmeter_readings`)
   - `InfluxDb.AllowInvalidServerCertificate`
+  - `Sqlite.Enabled`: enable/disable SQLite output
+  - `Sqlite.DatabasePath` (default: `timeseries.sqlite`, relative to `OutputRoot`)
 - `Meters[]`: list of gateway endpoints
   - `Active`: `true`/`false`
   - `Name`: optional (used for output folder naming)
@@ -55,6 +57,12 @@ Optional continuous polling mode:
 
 ```bash
 dotnet run --project .\SmartmeterGateway\SmartmeterGateway.csproj -c Release -- --poll
+```
+
+Manual CSV -> SQLite import (explicit, no auto-discovery):
+
+```bash
+dotnet run --project .\SmartmeterGateway\SmartmeterGateway.csproj -c Release -- --sqlite-import-csv --meter-key <meter-key> --series <BEZUG|EINSP> --csv <path-to-csv>
 ```
 
 Behavior:
@@ -79,6 +87,8 @@ For each active meter, files are written to `OutputRoot/<meterKey>/`:
 - `readings-15min-bezug.csv`
 - `readings-15min-einsp.csv`
 
+If SQLite output is enabled, one SQLite database file is also written to `OutputRoot/<DatabasePath>`.
+
 CSV format:
 
 - Header: `TargetTimeUtc,Value`
@@ -90,115 +100,132 @@ Each enabled output keeps its own cursor:
 
 - CSV: reads the last timestamp/value from the CSV file.
 - InfluxDB: queries the latest point (`time` and `value`) from the configured measurement, filtered to this source (`meter`, `direction`, `database='origin'`).
+- SQLite: queries the latest row from `raw_readings` filtered to this source (`source_type='smartmeter'`, `source_id`, `series`).
 
 If any enabled output has no cursor, a backfill is triggered so all outputs can catch up.
 
-## InfluxDB 3 quick setup (local)
+## Grafana (SQLite recommended)
 
-Example (PowerShell):
+Importable dashboards:
 
-```powershell
-Set-Location C:\InfluxDB3
-.\influxdb3.exe serve --data-dir "C:\InfluxDB3\data" --node-id home
-```
+- SQLite: [`doc/grafana-dashboard-sqlite.json`](doc/grafana-dashboard-sqlite.json)
+- InfluxDB (optional): [`doc/grafana-dashboard-influx.json`](doc/grafana-dashboard-influx.json)
 
-Set host/token once per shell session:
+### SQLite datasource plugin setup
 
-```powershell
-$env:INFLUXDB3_HOST_URL = "http://127.0.0.1:8181"
-$env:INFLUXDB3_AUTH_TOKEN = "<your-token>"
-```
+1. Install plugin `frser-sqlite-datasource` in Grafana.
+2. Restart Grafana.
+3. Create a new datasource of type `SQLite`.
+4. Set the database path to your generated SQLite file (usually `output/timeseries.sqlite` relative to this repo).
+5. Verify datasource with `Save & Test`.
 
-Create database:
+If Grafana runs in Docker/another host, the SQLite file must be reachable from that runtime (mount/bind path accordingly).
 
-```powershell
-.\influxdb3.exe create database home
-```
+### SQLite dashboard usage notes
 
-## Grafana example queries (build your own dashboard)
+- Daily/Monthly panels are grouped by local calendar boundaries via SQLite `localtime` conversion.
+- Variables `meter_netz` and `meter_haus` are runtime selections; no fixed meter IDs are stored in dashboard JSON.
+- The dashboard default time range is `now-7d`.
 
-An importable dashboard JSON is available at [`doc/grafana-dashboard.json`](doc/grafana-dashboard.json).
+## InfluxDB (optional)
 
-The examples below model a two-meter cascade (`Netz` and `Haus`) where a PV system sits between
-the two meters. Each meter's `BEZUG` and `EINSP` readings are combined into a signed series
-(positive = consumption, negative = feed-in), and `Produktion` is derived algebraically from the
-two signed values.
+Influx setup, limitations, and query details are documented here:
+
+- [`doc/INFLUX_DETAILS.md`](doc/INFLUX_DETAILS.md)
+
+## Grafana example queries (SQLite)
+
+These queries are designed for a two-meter cascade (`Netz` and `Haus`), for example with a PV system between both meters.
+
+Role model used in the dashboard:
+
+- `meter_netz`: grid-side meter (`Netz`)
+- `meter_haus`: house-side meter (`Haus`)
+
+Signed model:
+
+- `BEZUG` positive
+- `EINSP` negative
+- `Produktion = Haus - Netz`
 
 Recommended Grafana template variables:
 
 - `meter_netz`: physical meter ID used as grid meter (`Netz`)
 - `meter_haus`: physical meter ID used as house meter (`Haus`)
 
-Conventions used by the queries:
+Conventions used by the SQLite queries:
 
-- Input values are cumulative Wh counters per `meter` and `direction` (`BEZUG`, `EINSP`).
-- Delta is computed via `LAG(value)`.
-- In the power query, `delta * 4` converts Wh per 15-minute slot to average W.
+- Input values are cumulative Wh counters in `raw_readings` (`series = BEZUG/EINSP`).
+- Deltas are computed with `LAG(value)` per `(source_id, series)`.
+- In the power panel, `delta * 4.0` converts Wh per 15-minute slot to average W:
+  - 1 hour = 4 * 15 minutes
+  - therefore `Wh / 0.25h = Wh * 4 = W`
 - Signed logic: `BEZUG` is positive, `EINSP` is negative.
 
 Grafana panel hints:
 
 - Use `time` as time column and format as time series.
-- With the current wide-query style, each named output column becomes one series (`Netz`, `Haus`, `Produktion`, ...).
-- For the top power panel, **Fill opacity** around `25` gives a clear area chart.
+- The wide query shape (`MAX(CASE WHEN ...)`) yields one series per named column.
+- For the top power panel, **Fill opacity** around `25` keeps the area chart readable.
 
-### 1) Smartmeter – 15-min average power
+### 1) Smartmeter - 15-min average power (SQLite)
 
 ```sql
 WITH d AS (
   SELECT
-    time,
-    CASE WHEN meter='${meter_netz}' THEN 'Netz'
-         WHEN meter='${meter_haus}' THEN 'Haus'
-         ELSE meter END AS meter,
-    direction,
-    (value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) * 4 AS delta
-  FROM home_readings
-  WHERE "database"='origin'
-    AND direction IN ('EINSP','BEZUG')
-    AND $__timeFilter(time)
+    target_time_utc AS time,
+    source_id AS meter,
+    series,
+    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) * 4.0 AS delta
+  FROM raw_readings
+  WHERE source_type = 'smartmeter'
+    AND series IN ('BEZUG','EINSP')
+    AND source_id IN ('${meter_netz}','${meter_haus}')
+    AND unixepoch(target_time_utc) >= $__from / 1000
+    AND unixepoch(target_time_utc) < $__to / 1000
 ),
 signed AS (
   SELECT
     time,
     meter,
-    SUM(CASE WHEN direction='BEZUG' THEN delta ELSE -delta END) AS value
+    SUM(CASE WHEN series='BEZUG' THEN delta ELSE -delta END) AS value
   FROM d
   GROUP BY time, meter
 )
 SELECT
   time,
-  MAX(CASE WHEN meter='Netz' THEN value END) AS "Netz",
-  MAX(CASE WHEN meter='Haus' THEN value END) AS "Haus",
-  MAX(CASE WHEN meter='Haus' THEN value END) - MAX(CASE WHEN meter='Netz' THEN value END) AS "Produktion"
+  MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS "Netz",
+  MAX(CASE WHEN meter='${meter_haus}' THEN value END) AS "Haus",
+  MAX(CASE WHEN meter='${meter_haus}' THEN value END) - MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS "Produktion"
 FROM signed
 GROUP BY time
 ORDER BY time;
 ```
 
-### 2) Daily/Monthly sums
+### 2) Daily/Monthly sums (SQLite)
 
 ```sql
 WITH d AS (
   SELECT
-    time,
-    CASE WHEN meter='${meter_netz}' THEN 'Netz'
-         WHEN meter='${meter_haus}' THEN 'Haus'
-         ELSE meter END AS meter,
-    direction,
-    (value - LAG(value) OVER (PARTITION BY meter, direction ORDER BY time)) AS delta_wh
-  FROM home_readings
-  WHERE "database"='origin'
-    AND direction IN ('EINSP','BEZUG')
-    -- Monthly variant: use INTERVAL '2 years'
-    AND time >= NOW() - INTERVAL '90 days'
+    target_time_utc AS time,
+    source_id AS meter,
+    series,
+    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) AS delta_wh
+  FROM raw_readings
+  WHERE source_type = 'smartmeter'
+    AND series IN ('BEZUG','EINSP')
+    AND source_id IN ('${meter_netz}','${meter_haus}')
+    -- Monthly variant: '-2 years'
+    AND unixepoch(target_time_utc) >= unixepoch('now', '-90 days')
 ),
 agg AS (
   SELECT
-    -- Monthly variant: DATE_TRUNC('month', time)
-    DATE_TRUNC('day', time) AS time,
+    -- Daily variant:
+    unixepoch(date(time, 'localtime') || ' 00:00:00', 'utc') AS time,
+    -- Monthly variant:
+    -- unixepoch(strftime('%Y-%m-01', time, 'localtime') || ' 00:00:00', 'utc') AS time,
     meter,
-    direction,
+    series,
     SUM(delta_wh) / 1000.0 AS kwh
   FROM d
   WHERE delta_wh IS NOT NULL
@@ -208,30 +235,29 @@ net AS (
   SELECT
     time,
     meter,
-    MAX(CASE WHEN direction='BEZUG' THEN kwh END) AS bezug_kwh,
-    MAX(CASE WHEN direction='EINSP' THEN kwh END) AS einsp_kwh
+    MAX(CASE WHEN series='BEZUG' THEN kwh END) AS bezug_kwh,
+    MAX(CASE WHEN series='EINSP' THEN kwh END) AS einsp_kwh
   FROM agg
   GROUP BY time, meter
 )
 SELECT
   time,
-  MAX(CASE WHEN meter='Netz' THEN bezug_kwh END) AS "Netz Bezug",
-  MAX(CASE WHEN meter='Haus' THEN bezug_kwh END) AS "Haus Bezug",
-  -MAX(CASE WHEN meter='Netz' THEN einsp_kwh END) AS "Netz Einspeisung",
-  -MAX(CASE WHEN meter='Haus' THEN einsp_kwh END) AS "Haus Einspeisung",
-  MAX(CASE WHEN meter='Haus' THEN bezug_kwh - einsp_kwh END)
-  - MAX(CASE WHEN meter='Netz' THEN bezug_kwh - einsp_kwh END) AS "Produktion"
+  MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh END) AS "Netz Bezug",
+  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh END) AS "Haus Bezug",
+  -MAX(CASE WHEN meter='${meter_netz}' THEN einsp_kwh END) AS "Netz Einspeisung",
+  -MAX(CASE WHEN meter='${meter_haus}' THEN einsp_kwh END) AS "Haus Einspeisung",
+  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh - einsp_kwh END)
+  - MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh - einsp_kwh END) AS "Produktion"
 FROM net
 GROUP BY time
 ORDER BY time;
 ```
 
-## Privacy / anonymization
+SQLite timezone note:
 
-- The Grafana dashboard JSON does not contain credentials or fixed real meter IDs.
-- Meter IDs are selected at runtime via variables (`meter_netz`, `meter_haus`).
-- Local runtime output is excluded from Git via `.gitignore` (`/output/`).
-- Local credentials are excluded via `.gitignore` (`SmartmeterGateway/appsettings.json`).
+- Daily/Monthly grouping is intentionally based on local calendar boundaries (`localtime`) before converting back to UTC epoch for Grafana.
+- This keeps midnight assignment aligned with local day/month semantics in the SQLite dashboard.
+- `localtime` uses the timezone of the system where SQLite runs (Grafana host), not the browser timezone.
 
 ## Notes
 

@@ -9,6 +9,16 @@ internal static class Program
 
 	public static async Task<int> Main(string[] args)
 	{
+		if (HasFlag(args, "--sqlite-import-csv"))
+		{
+			var importConfig = LoadConfig();
+			var meterKey = args[Array.IndexOf(args, "--meter-key") + 1];
+			var seriesName = args[Array.IndexOf(args, "--series") + 1];
+			var csvPath = args[Array.IndexOf(args, "--csv") + 1];
+			await SqliteSeriesOutput.ImportCsvAsync(importConfig.Outputs.Sqlite, importConfig.OutputRoot, meterKey, seriesName, csvPath);
+			return 0;
+		}
+
 		var config = LoadConfig();
 		using var outputs = CreateOutputs(config);
 
@@ -44,6 +54,9 @@ internal static class Program
 	static bool HasPollFlag(string[] args) =>
 		args.Any(a => string.Equals(a, "--poll", StringComparison.OrdinalIgnoreCase));
 
+	static bool HasFlag(string[] args, string flag) =>
+		args.Any(a => string.Equals(a, flag, StringComparison.OrdinalIgnoreCase));
+
 	static AppConfig LoadConfig()
 	{
 		var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
@@ -61,10 +74,10 @@ internal static class Program
 			.Where(m => m.BaseUrl is not null && !string.IsNullOrWhiteSpace(m.Username) && !string.IsNullOrWhiteSpace(m.Password))
 			.ToList();
 
-		var outputs = cfg.Outputs ?? new OutputTargets(new CsvTarget(true), new InfluxDbTarget(false));
-		if (!outputs.Csv.Enabled && !outputs.InfluxDb.Enabled)
+		var outputs = cfg.Outputs ?? new OutputTargets();
+		if (!outputs.Csv.Enabled && !outputs.InfluxDb.Enabled && !outputs.Sqlite.Enabled)
 		{
-			throw new InvalidOperationException("At least one output must be enabled: Outputs.Csv.Enabled and/or Outputs.InfluxDb.Enabled.");
+			throw new InvalidOperationException("At least one output must be enabled: Outputs.Csv.Enabled and/or Outputs.InfluxDb.Enabled and/or Outputs.Sqlite.Enabled.");
 		}
 
 		var polling = NormalizePolling(cfg.Polling);
@@ -90,7 +103,14 @@ internal static class Program
 
 	static DisposableBag<ISeriesOutput> CreateOutputs(AppConfig config)
 	{
-		var outputs = ((IOutputTarget[])[config.Outputs.Csv, config.Outputs.InfluxDb])
+		var targets = new List<IOutputTarget>
+		{
+			config.Outputs.Csv,
+			config.Outputs.InfluxDb,
+			config.Outputs.Sqlite,
+		};
+
+		var outputs = targets
 			.Where(t => t.Enabled)
 			.Select(t => t.CreateOutput())
 			.ToList();

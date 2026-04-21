@@ -48,13 +48,93 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
         _ = outDir;
         var direction = series.UsagePoint.UsagePointName[^5..].ToUpperInvariant();
         var measurement = GetMeasurement();
+        return await QueryLatestCursorAsync(meterKey, direction, measurement);
+    }
 
+    public async Task<OutputWriteResult> WriteAsync(string meterKey, string outDir, OriginSeries series, IReadOnlyList<ReadingPoint> points, bool append)
+    {
+        _ = append;
+        _ = outDir;
+        if (points.Count == 0)
+        {
+            return new OutputWriteResult(0, "no-op");
+        }
+
+        var direction = series.UsagePoint.UsagePointName[^5..].ToUpperInvariant();
+        var measurement = GetMeasurement();
+
+        var body = new StringBuilder(capacity: points.Count * 64);
+        var written = 0;
+        foreach (var p in points.OrderBy(p => p.TargetTimeUtc))
+        {
+            if (p.Value is null)
+            {
+                continue;
+            }
+
+            var ts = p.TargetTimeUtc.ToUnixTimeSeconds();
+            body.Append(EscapeMeasurement(measurement));
+            body.Append(",meter=").Append(EscapeTag(meterKey));
+            body.Append(",direction=").Append(EscapeTag(direction));
+            body.Append(",database=origin value=").Append(p.Value.Value.ToString(CultureInfo.InvariantCulture));
+            body.Append(' ').Append(ts);
+            body.Append('\n');
+            written++;
+        }
+
+        if (written == 0)
+        {
+            return new OutputWriteResult(0, "no-op");
+        }
+
+        var endpoint = $"/api/v2/write?org={Uri.EscapeDataString(_options.Org)}&bucket={Uri.EscapeDataString(_options.Bucket)}&precision=s";
+        using var content = new StringContent(body.ToString(), Encoding.UTF8, "text/plain");
+        HttpResponseMessage response;
+        try
+        {
+            response = await _http.PostAsync(endpoint, content);
+        }
+        catch (HttpRequestException ex)
+        {
+            throw new InvalidOperationException(
+                $"InfluxDB is not reachable at '{_options.Url}'. Start InfluxDB first (for example '.\\influx.cmd') and verify Outputs.InfluxDb.Url.",
+                ex);
+        }
+
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                var payload = await response.Content.ReadAsStringAsync();
+                throw new InvalidOperationException($"InfluxDB write failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
+            }
+        }
+
+        return new OutputWriteResult(written, $"{_options.Url} (bucket={_options.Bucket}, measurement={measurement})");
+    }
+
+    public void Dispose() => _http.Dispose();
+
+    private string GetMeasurement() =>
+        string.IsNullOrWhiteSpace(_options.Measurement) ? DefaultMeasurement : _options.Measurement;
+
+    private static string EscapeIdentifier(string identifier) =>
+        $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
+
+    private static string EscapeSqlString(string value) => value
+        .Replace("'", "''", StringComparison.Ordinal);
+
+    private async Task<OutputCursor?> QueryLatestCursorAsync(
+        string meterKey,
+        string direction,
+        string measurement)
+    {
         var sql = $"SELECT time AS max_time, value " +
                   $"FROM {EscapeIdentifier(measurement)} " +
                   $"WHERE meter = '{EscapeSqlString(meterKey)}' " +
                   $"AND direction = '{EscapeSqlString(direction)}' " +
-              $"AND \"database\" = 'origin' " +
-              $"ORDER BY time DESC LIMIT 1";
+                  $"AND \"database\" = 'origin' " +
+                  $"ORDER BY time DESC LIMIT 1";
 
         var body = JsonSerializer.Serialize(new
         {
@@ -85,12 +165,6 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
             if (!response.IsSuccessStatusCode)
             {
                 var payload = await response.Content.ReadAsStringAsync();
-                if (response.StatusCode == HttpStatusCode.InternalServerError
-                    && payload.Contains("table 'public.iox.", StringComparison.OrdinalIgnoreCase)
-                    && payload.Contains("not found", StringComparison.OrdinalIgnoreCase))
-                {
-                    return null;
-                }
                 throw new InvalidOperationException($"InfluxDB query failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
             }
 
@@ -135,75 +209,6 @@ internal sealed class InfluxDbSeriesOutput : ISeriesOutput, IDisposable
             return new OutputCursor(ts.ToUniversalTime(), value);
         }
     }
-
-    public async Task<OutputWriteResult> WriteAsync(string meterKey, string outDir, OriginSeries series, IReadOnlyList<ReadingPoint> points, bool append)
-    {
-        if (points.Count == 0)
-        {
-            return new OutputWriteResult(0, "no-op");
-        }
-
-        var direction = series.UsagePoint.UsagePointName[^5..].ToUpperInvariant();
-        var measurement = GetMeasurement();
-
-        var body = new StringBuilder(capacity: points.Count * 64);
-        var written = 0;
-        foreach (var p in points.OrderBy(p => p.TargetTimeUtc))
-        {
-            if (p.Value is null)
-            {
-                continue;
-            }
-
-            var ts = p.TargetTimeUtc.ToUnixTimeSeconds();
-            body.Append(EscapeMeasurement(measurement));
-            body.Append(",meter=").Append(EscapeTag(meterKey));
-            body.Append(",direction=").Append(EscapeTag(direction));
-            body.Append(",database=origin value=").Append(p.Value.Value.ToString(CultureInfo.InvariantCulture));
-            body.Append(' ').Append(ts);
-            body.Append('\n');
-            written++;
-        }
-
-        if (written > 0)
-        {
-            var endpoint = $"/api/v2/write?org={Uri.EscapeDataString(_options.Org)}&bucket={Uri.EscapeDataString(_options.Bucket)}&precision=s";
-            using var content = new StringContent(body.ToString(), Encoding.UTF8, "text/plain");
-            HttpResponseMessage response;
-            try
-            {
-                response = await _http.PostAsync(endpoint, content);
-            }
-            catch (HttpRequestException ex)
-            {
-                throw new InvalidOperationException(
-                    $"InfluxDB is not reachable at '{_options.Url}'. Start InfluxDB first (for example '.\\influx.cmd') and verify Outputs.InfluxDb.Url.",
-                    ex);
-            }
-
-            using (response)
-            {
-                if (!response.IsSuccessStatusCode)
-                {
-                    var payload = await response.Content.ReadAsStringAsync();
-                    throw new InvalidOperationException($"InfluxDB write failed: {(int)response.StatusCode} {response.ReasonPhrase}. Body: {payload}");
-                }
-            }
-        }
-
-        return new OutputWriteResult(written, $"{_options.Url} (bucket={_options.Bucket}, measurement={measurement})");
-    }
-
-    public void Dispose() => _http.Dispose();
-
-    private string GetMeasurement() =>
-        string.IsNullOrWhiteSpace(_options.Measurement) ? DefaultMeasurement : _options.Measurement;
-
-    private static string EscapeIdentifier(string identifier) =>
-        $"\"{identifier.Replace("\"", "\"\"", StringComparison.Ordinal)}\"";
-
-    private static string EscapeSqlString(string value) => value
-        .Replace("'", "''", StringComparison.Ordinal);
 
     private static string EscapeMeasurement(string value) => value
         .Replace(",", "\\,", StringComparison.Ordinal)

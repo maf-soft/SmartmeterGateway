@@ -1,0 +1,547 @@
+{
+    "__inputs": [
+        {
+            "name": "DS_SQLITE",
+            "label": "SQLite",
+            "description": "",
+            "type": "datasource",
+            "pluginId": "frser-sqlite-datasource",
+            "pluginName": "SQLite"
+        }
+    ],
+    "__elements": {},
+    "__requires": [
+        {
+            "type": "grafana",
+            "id": "grafana",
+            "name": "Grafana",
+            "version": "10.0.0"
+        },
+        {
+            "type": "datasource",
+            "id": "frser-sqlite-datasource",
+            "name": "SQLite",
+            "version": "3.0.0"
+        },
+        {
+            "type": "panel",
+            "id": "timeseries",
+            "name": "Time series",
+            "version": ""
+        }
+    ],
+    "annotations": {
+        "list": [
+            {
+                "builtIn": 1,
+                "datasource": {
+                    "type": "grafana",
+                    "uid": "-- Grafana --"
+                },
+                "enable": true,
+                "hide": true,
+                "iconColor": "rgba(0, 211, 255, 1)",
+                "name": "Annotations & Alerts",
+                "type": "dashboard"
+            }
+        ]
+    },
+    "editable": true,
+    "fiscalYearStartMonth": 0,
+    "graphTooltip": 0,
+    "id": null,
+    "links": [],
+    "panels": [
+        {
+            "datasource": {
+                "type": "frser-sqlite-datasource",
+                "uid": "${DS_SQLITE}"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "drawStyle": "line",
+                        "fillOpacity": 25,
+                        "lineWidth": 1,
+                        "showPoints": "auto",
+                        "thresholdsStyle": {
+                            "mode": "dashed"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "#EAB839",
+                                "value": 0
+                            }
+                        ]
+                    },
+                    "unit": "watt"
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Produktion"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#F2CC0C"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Netz"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#5794F2"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Haus"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#E24D42"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": {
+                "h": 14,
+                "w": 24,
+                "x": 0,
+                "y": 0
+            },
+            "id": 1,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "frser-sqlite-datasource",
+                        "uid": "${DS_SQLITE}"
+                    },
+                    "queryType": "time series",
+                    "rawQueryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) * 4.0 AS delta\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= $__from / 1000\n    AND unixepoch(target_time_utc) < $__to / 1000\n),\nsigned AS (\n  SELECT\n    time,\n    meter,\n    SUM(CASE WHEN series='BEZUG' THEN delta ELSE -delta END) AS value\n  FROM d\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS \"Netz\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN value END) AS \"Haus\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN value END) - MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS \"Produktion\"\nFROM signed\nGROUP BY time\nORDER BY time;",
+                    "refId": "A",
+                    "queryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) * 4.0 AS delta\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= $__from / 1000\n    AND unixepoch(target_time_utc) < $__to / 1000\n),\nsigned AS (\n  SELECT\n    time,\n    meter,\n    SUM(CASE WHEN series='BEZUG' THEN delta ELSE -delta END) AS value\n  FROM d\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS \"Netz\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN value END) AS \"Haus\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN value END) - MAX(CASE WHEN meter='${meter_netz}' THEN value END) AS \"Produktion\"\nFROM signed\nGROUP BY time\nORDER BY time;",
+                    "timeColumns": [
+                        "time"
+                    ]
+                }
+            ],
+            "title": "Smartmeter (SQLite) - 15-min average power",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "frser-sqlite-datasource",
+                "uid": "${DS_SQLITE}"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "barWidthFactor": 0.8,
+                        "drawStyle": "bars",
+                        "fillOpacity": 25,
+                        "lineWidth": 1,
+                        "showPoints": "never",
+                        "thresholdsStyle": {
+                            "mode": "dashed"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "#EAB839",
+                                "value": 0
+                            }
+                        ]
+                    },
+                    "unit": "kwatth"
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Produktion"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#F2CC0C"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Netz Einspeisung"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#5794F2"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Haus Einspeisung"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#73BF69"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Netz Bezug"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#B877D9"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Haus Bezug"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#E24D42"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 16,
+                "x": 0,
+                "y": 14
+            },
+            "id": 2,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "frser-sqlite-datasource",
+                        "uid": "${DS_SQLITE}"
+                    },
+                    "queryType": "time series",
+                    "rawQueryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) AS delta_wh\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= unixepoch('now', '-90 days')\n),\nagg AS (\n  SELECT\n    unixepoch(date(time, 'localtime') || ' 00:00:00', 'utc') AS time,\n    meter,\n    series,\n    SUM(delta_wh) / 1000.0 AS kwh\n  FROM d\n  WHERE delta_wh IS NOT NULL\n  GROUP BY 1, 2, 3\n),\nnet AS (\n  SELECT\n    time,\n    meter,\n    MAX(CASE WHEN series='BEZUG' THEN kwh END) AS bezug_kwh,\n    MAX(CASE WHEN series='EINSP' THEN kwh END) AS einsp_kwh\n  FROM agg\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh END) AS \"Netz Bezug\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh END) AS \"Haus Bezug\",\n  -MAX(CASE WHEN meter='${meter_netz}' THEN einsp_kwh END) AS \"Netz Einspeisung\",\n  -MAX(CASE WHEN meter='${meter_haus}' THEN einsp_kwh END) AS \"Haus Einspeisung\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh - einsp_kwh END) - MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh - einsp_kwh END) AS \"Produktion\"\nFROM net\nGROUP BY time\nORDER BY time;",
+                    "refId": "A",
+                    "queryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) AS delta_wh\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= unixepoch('now', '-90 days')\n),\nagg AS (\n  SELECT\n    unixepoch(date(time, 'localtime') || ' 00:00:00', 'utc') AS time,\n    meter,\n    series,\n    SUM(delta_wh) / 1000.0 AS kwh\n  FROM d\n  WHERE delta_wh IS NOT NULL\n  GROUP BY 1, 2, 3\n),\nnet AS (\n  SELECT\n    time,\n    meter,\n    MAX(CASE WHEN series='BEZUG' THEN kwh END) AS bezug_kwh,\n    MAX(CASE WHEN series='EINSP' THEN kwh END) AS einsp_kwh\n  FROM agg\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh END) AS \"Netz Bezug\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh END) AS \"Haus Bezug\",\n  -MAX(CASE WHEN meter='${meter_netz}' THEN einsp_kwh END) AS \"Netz Einspeisung\",\n  -MAX(CASE WHEN meter='${meter_haus}' THEN einsp_kwh END) AS \"Haus Einspeisung\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh - einsp_kwh END) - MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh - einsp_kwh END) AS \"Produktion\"\nFROM net\nGROUP BY time\nORDER BY time;",
+                    "timeColumns": [
+                        "time"
+                    ]
+                }
+            ],
+            "timeFrom": "now-90d",
+            "title": "Smartmeter (SQLite) - Daily sums",
+            "type": "timeseries"
+        },
+        {
+            "datasource": {
+                "type": "frser-sqlite-datasource",
+                "uid": "${DS_SQLITE}"
+            },
+            "fieldConfig": {
+                "defaults": {
+                    "color": {
+                        "mode": "palette-classic"
+                    },
+                    "custom": {
+                        "barWidthFactor": 0.8,
+                        "drawStyle": "bars",
+                        "fillOpacity": 25,
+                        "lineWidth": 1,
+                        "showPoints": "never",
+                        "thresholdsStyle": {
+                            "mode": "dashed"
+                        }
+                    },
+                    "mappings": [],
+                    "thresholds": {
+                        "mode": "absolute",
+                        "steps": [
+                            {
+                                "color": "green",
+                                "value": 0
+                            },
+                            {
+                                "color": "#EAB839",
+                                "value": 0
+                            }
+                        ]
+                    },
+                    "unit": "kwatth"
+                },
+                "overrides": [
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Produktion"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#F2CC0C"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Netz Einspeisung"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#5794F2"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Haus Einspeisung"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#73BF69"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Netz Bezug"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#B877D9"
+                                }
+                            }
+                        ]
+                    },
+                    {
+                        "matcher": {
+                            "id": "byName",
+                            "options": "Haus Bezug"
+                        },
+                        "properties": [
+                            {
+                                "id": "color",
+                                "value": {
+                                    "mode": "fixed",
+                                    "fixedColor": "#E24D42"
+                                }
+                            }
+                        ]
+                    }
+                ]
+            },
+            "gridPos": {
+                "h": 8,
+                "w": 8,
+                "x": 16,
+                "y": 14
+            },
+            "id": 3,
+            "options": {
+                "legend": {
+                    "calcs": [],
+                    "displayMode": "list",
+                    "placement": "bottom",
+                    "showLegend": true
+                },
+                "tooltip": {
+                    "hideZeros": false,
+                    "mode": "single",
+                    "sort": "none"
+                }
+            },
+            "targets": [
+                {
+                    "datasource": {
+                        "type": "frser-sqlite-datasource",
+                        "uid": "${DS_SQLITE}"
+                    },
+                    "queryType": "time series",
+                    "rawQueryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) AS delta_wh\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= unixepoch('now', '-2 years')\n),\nagg AS (\n  SELECT\n    unixepoch(strftime('%Y-%m-01', time, 'localtime') || ' 00:00:00', 'utc') AS time,\n    meter,\n    series,\n    SUM(delta_wh) / 1000.0 AS kwh\n  FROM d\n  WHERE delta_wh IS NOT NULL\n  GROUP BY 1, 2, 3\n),\nnet AS (\n  SELECT\n    time,\n    meter,\n    MAX(CASE WHEN series='BEZUG' THEN kwh END) AS bezug_kwh,\n    MAX(CASE WHEN series='EINSP' THEN kwh END) AS einsp_kwh\n  FROM agg\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh END) AS \"Netz Bezug\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh END) AS \"Haus Bezug\",\n  -MAX(CASE WHEN meter='${meter_netz}' THEN einsp_kwh END) AS \"Netz Einspeisung\",\n  -MAX(CASE WHEN meter='${meter_haus}' THEN einsp_kwh END) AS \"Haus Einspeisung\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh - einsp_kwh END) - MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh - einsp_kwh END) AS \"Produktion\"\nFROM net\nGROUP BY time\nORDER BY time;",
+                    "refId": "A",
+                    "queryText": "WITH d AS (\n  SELECT\n    target_time_utc AS time,\n    source_id AS meter,\n    series,\n    (value - LAG(value) OVER (PARTITION BY source_id, series ORDER BY target_time_utc)) AS delta_wh\n  FROM raw_readings\n  WHERE source_type = 'smartmeter'\n    AND series IN ('BEZUG','EINSP')\n    AND source_id IN ('${meter_netz}','${meter_haus}')\n    AND unixepoch(target_time_utc) >= unixepoch('now', '-2 years')\n),\nagg AS (\n  SELECT\n    unixepoch(strftime('%Y-%m-01', time, 'localtime') || ' 00:00:00', 'utc') AS time,\n    meter,\n    series,\n    SUM(delta_wh) / 1000.0 AS kwh\n  FROM d\n  WHERE delta_wh IS NOT NULL\n  GROUP BY 1, 2, 3\n),\nnet AS (\n  SELECT\n    time,\n    meter,\n    MAX(CASE WHEN series='BEZUG' THEN kwh END) AS bezug_kwh,\n    MAX(CASE WHEN series='EINSP' THEN kwh END) AS einsp_kwh\n  FROM agg\n  GROUP BY time, meter\n)\nSELECT\n  time,\n  MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh END) AS \"Netz Bezug\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh END) AS \"Haus Bezug\",\n  -MAX(CASE WHEN meter='${meter_netz}' THEN einsp_kwh END) AS \"Netz Einspeisung\",\n  -MAX(CASE WHEN meter='${meter_haus}' THEN einsp_kwh END) AS \"Haus Einspeisung\",\n  MAX(CASE WHEN meter='${meter_haus}' THEN bezug_kwh - einsp_kwh END) - MAX(CASE WHEN meter='${meter_netz}' THEN bezug_kwh - einsp_kwh END) AS \"Produktion\"\nFROM net\nGROUP BY time\nORDER BY time;",
+                    "timeColumns": [
+                        "time"
+                    ]
+                }
+            ],
+            "timeFrom": "now-2y",
+            "title": "Smartmeter (SQLite) - Monthly sums",
+            "type": "timeseries"
+        }
+    ],
+    "refresh": "30s",
+    "schemaVersion": 39,
+    "tags": [
+        "smartmeter",
+        "sqlite"
+    ],
+    "templating": {
+        "list": [
+            {
+                "current": {
+                    "selected": false,
+                    "text": "",
+                    "value": ""
+                },
+                "datasource": {
+                    "type": "frser-sqlite-datasource",
+                    "uid": "${DS_SQLITE}"
+                },
+                "definition": "SELECT DISTINCT source_id FROM raw_readings WHERE source_type='smartmeter' ORDER BY source_id DESC;",
+                "hide": 0,
+                "includeAll": false,
+                "label": "Meter Netz",
+                "multi": false,
+                "name": "meter_netz",
+                "options": [],
+                "query": "SELECT DISTINCT source_id FROM raw_readings WHERE source_type='smartmeter' ORDER BY source_id DESC;",
+                "refresh": 1,
+                "skipUrlSync": false,
+                "type": "query"
+            },
+            {
+                "current": {
+                    "selected": false,
+                    "text": "",
+                    "value": ""
+                },
+                "datasource": {
+                    "type": "frser-sqlite-datasource",
+                    "uid": "${DS_SQLITE}"
+                },
+                "definition": "SELECT DISTINCT source_id FROM raw_readings WHERE source_type='smartmeter' ORDER BY source_id ASC;",
+                "hide": 0,
+                "includeAll": false,
+                "label": "Meter Haus",
+                "multi": false,
+                "name": "meter_haus",
+                "options": [],
+                "query": "SELECT DISTINCT source_id FROM raw_readings WHERE source_type='smartmeter' ORDER BY source_id ASC;",
+                "refresh": 1,
+                "skipUrlSync": false,
+                "type": "query"
+            }
+        ]
+    },
+    "time": {
+        "from": "now-7d",
+        "to": "now"
+    },
+    "timepicker": {},
+    "timezone": "browser",
+    "title": "Smartmeter Gateway (SQLite)",
+    "uid": "smartmeter-sqlite",
+    "version": 10,
+    "weekStart": ""
+}

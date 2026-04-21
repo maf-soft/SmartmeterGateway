@@ -1,6 +1,11 @@
 namespace SmartmeterGateway.Output;
 
-internal sealed record OutputTargets(CsvTarget Csv, InfluxDbTarget InfluxDb);
+internal sealed record OutputTargets
+{
+    public CsvTarget Csv { get; init; } = new(true);
+    public InfluxDbTarget InfluxDb { get; init; } = new(false);
+    public SqliteTarget Sqlite { get; init; } = new(false);
+}
 
 internal interface IOutputTarget
 {
@@ -23,4 +28,11 @@ internal sealed record InfluxDbTarget(
     bool AllowInvalidServerCertificate = false) : IOutputTarget
 {
     public ISeriesOutput CreateOutput() => new InfluxDbSeriesOutput(this);
+}
+
+internal sealed record SqliteTarget(
+    bool Enabled,
+    string DatabasePath = "timeseries.sqlite") : IOutputTarget
+{
+    public ISeriesOutput CreateOutput() => new SqliteSeriesOutput(this);
 }
