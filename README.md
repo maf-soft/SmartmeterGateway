@@ -109,6 +109,7 @@ If any enabled output has no cursor, a backfill is triggered so all outputs can 
 Importable dashboards:
 
 - SQLite: [`doc/grafana-dashboard-sqlite.json`](doc/grafana-dashboard-sqlite.json)
+- SQLite Reports (optional table view): [`doc/grafana-dashboard-sqlite-reports.json`](doc/grafana-dashboard-sqlite-reports.json)
 - InfluxDB (optional): [`doc/grafana-dashboard-influx.json`](doc/grafana-dashboard-influx.json)
 
 ### SQLite datasource plugin setup
